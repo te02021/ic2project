@@ -3,10 +3,10 @@ from mfrc522 import SimpleMFRC522
 import time
 import datetime
 import pytz
-from RPLCD.i2c import CharLCD
+import LCD1602
 import firebase_admin
 from firebase_admin import credentials, firestore
-from google.cloud.firestore_v1.base_query import FieldFilter
+from google.cloud.firestore_v1.base_query import FieldFilter, BaseCompositeFilter
 import threading
 
 # Configurar GPIO
@@ -23,8 +23,8 @@ local_timezone = pytz.timezone('America/Argentina/Buenos_Aires')
 now_local = now_utc.replace(tzinfo=pytz.utc).astimezone(local_timezone)
 
 # Inicializar LCD
-lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1, cols=16, rows=2, dotsize=8)
-lcd.clear()
+LCD1602.init(0x27, 1)
+LCD1602.clear()
 
 # Configuración del lector RFID
 reader = SimpleMFRC522()
@@ -55,6 +55,20 @@ OPCION_INGRESAR = 1
 OPCION_REGISTRAR = 2
 OPCION_ELIMINAR = 3
 
+def preguntar():
+    LCD1602.clear()
+    LCD1602.write(0,0,"0->VOLVER A MENU")
+    LCD1602.write(0,1,"1->REITENTAR")
+    opcion = ""
+    while not opcion:
+        tecla = getKey()
+        if tecla in ["0", "1"]:
+            opcion = tecla
+
+    if opcion == "0":
+        main()
+    elif opcion == "1":
+        eliminar()
 
 def setup_matrix():
     # Configurar pines de fila como salida y pines de columna como entrada con pull-up
@@ -78,10 +92,6 @@ def getKey():
                 k = keys[r][c]
             GPIO.output(pinFila[r], GPIO.HIGH)
     return k
-
-def mostrar_en_lcd(mensaje):
-    lcd.clear()
-    lcd.write_string(mensaje)
 
 def leer_tarjeta_rfid():
     try:
@@ -125,11 +135,14 @@ def verificar_clave_en_firebase(clave):
 # Función para ingresar clave numérica de 4 dígitos
 def ingresar_clave():
     clave = ""
+    contador = 0
     while len(clave) < 4:
         tecla = getKey()
         if tecla is not None and tecla.isdigit():
             clave += tecla
-            lcd.write_string("*")  # Muestra "*" en lugar de la tecla presionada para ocultar la clave
+            print(contador)
+            LCD1602.write(contador,1,"*")  # Muestra "*" en lugar de la tecla presionada para ocultar la clave
+            contador += 1
             time.sleep(0.5)  # Espera 0.5 segundos antes de limpiar la pantalla
     return clave
 
@@ -165,70 +178,79 @@ def ingresar_con_rfid(id_tarjeta):
     
     if id_tarjeta:
         if verificar_tarjeta_en_firebase(id_tarjeta):
-            lcd.clear()
-            mostrar_en_lcd("ACCESO PERMITIDO")
+            LCD1602.clear()
+            LCD1602.write(0,0,"ACCESO PERMITIDO")
             registrar_evento("ingreso_rfid_exitoso", id_tarjeta=id_tarjeta)
+            time.sleep(1)
             # Lógica para permitir el acceso al edificio
         else:
-            lcd.clear()
-            mostrar_en_lcd("ACCESO DENEGADO")
+            LCD1602.clear()
+            LCD1602.write(0,0,"ACCESO DENEGADO")
             registrar_evento("ingreso_rfid_fallido", id_tarjeta=id_tarjeta)
+            time.sleep(1)
             # Lógica para denegar el acceso
     else:
-        lcd.clear()
-        mostrar_en_lcd("ERROR AL LEER RFID")
+        LCD1602.clear()
+        LCD1602.write(0,0,"ERROR AL LEER")
+        LCD1602.write(0,1,"RFID")
         
 def ingresar_con_clave():
-    lcd.clear()
-    mostrar_en_lcd(" INGRESE CLAVE\n\r NUMERICA:")
+    LCD1602.clear()
+    LCD1602.write(0,0,"INGRESE CLAVE:")
     clave = ingresar_clave()
     
 
     # Comprobar si se encontró algún usuario con la clave proporcionada
     if verificar_clave_en_firebase(clave):
         # La clave coincide con la de un usuario registrado
-        lcd.clear()
-        mostrar_en_lcd("ACCESO PERMITIDO")
+        LCD1602.clear()
+        LCD1602.write(0,0,"ACCESO PERMITIDO")
         registrar_evento("ingreso_clave_exitoso", id_clave=clave)
+        time.sleep(1)
     else:
         # La clave no coincide con ninguna clave registrada
-        lcd.clear()
-        mostrar_en_lcd("ACCESO DENEGADO")
+        LCD1602.clear()
+        LCD1602.write(0,0,"ACCESO DENEGADO")
         registrar_evento("ingreso_clave_fallido", id_clave=clave)
+        time.sleep(1)
     
 def ingresar():
-    lcd.clear()
-    mostrar_en_lcd("   1--->RFID\n\r   2--->CLAVE")
+    LCD1602.clear()
+    LCD1602.write(0,0,"1->RFID 2->CLAVE")
+    LCD1602.write(4,1,"0->VOLVER")
     
     opcion = ""
     while not opcion:
         tecla = getKey()
-        if tecla in ["1", "2"]:
+        if tecla in ["1", "2", "0"]:
             opcion = tecla
 
     if opcion == "1":
-        lcd.clear()
-        mostrar_en_lcd("ACERQUE SU RFID")
+        LCD1602.clear()
+        LCD1602.write(0,0,"ACERQUE SU RFID")
         id_tarjeta = leer_tarjeta_rfid()
         ingresar_con_rfid(id_tarjeta)
     elif opcion == "2":
         ingresar_con_clave()
+    elif opcion == "0":
+        main()
 
 def registrar():
-    lcd.clear()
-    mostrar_en_lcd("APROXIME TARJETA")
+    LCD1602.clear()
+    LCD1602.write(4,0,"APROXIME")
+    LCD1602.write(4,1,"TARJETA")
     id_tarjeta = leer_tarjeta_rfid()
     if id_tarjeta:
         if verificar_tarjeta_en_firebase(id_tarjeta):
-            lcd.clear()
-            mostrar_en_lcd("RFID YA ESTA REGISTRADO")
+            LCD1602.clear()
+            LCD1602.write(2,0,"RFID YA ESTA")
+            LCD1602.write(3,1,"REGISTRADO")
             registrar_evento("registro_denegado", id_tarjeta=id_tarjeta)
+            time.sleep(1)
         else:
-            lcd.clear()
-            mostrar_en_lcd("CLAVE NUMERICA:")
+            LCD1602.clear()
+            LCD1602.write(0,0,"CLAVE NUMERICA:")
             clave = ingresar_clave()
-            lcd.clear()
-            mostrar_en_lcd("GUARDANDO...")
 
             # Obtener una referencia a la colección "Usuarios" en Firestore
             usuarios_ref = db.collection('usuarios')
@@ -238,68 +260,79 @@ def registrar():
                 'rfid': id_tarjeta,
                 'clave': clave
             })
-            lcd.clear()
-            mostrar_en_lcd("USUARIO REGISTRADO")
+            LCD1602.clear()
+            LCD1602.write(0,0,"USUARIO REGISTRADO")
             registrar_evento("registro_exitoso", id_tarjeta=id_tarjeta)
+            time.sleep(1)
 
 def eliminar():
-    lcd.clear()
-    mostrar_en_lcd("APROXIME TARJETA")
+    LCD1602.clear()
+    LCD1602.write(4,0,"APROXIME")
+    LCD1602.write(4,1,"TARJETA")
     id_tarjeta = leer_tarjeta_rfid()
     if id_tarjeta:
         if verificar_tarjeta_en_firebase(id_tarjeta):
-            lcd.clear()
-            mostrar_en_lcd("CLAVE NUMERICA:")
+            LCD1602.clear()
+            LCD1602.write(0,0,"CLAVE NUMERICA:")
             clave = ingresar_clave()
-
+            
             # Verificar que la clave coincida con la registrada en Firestore
             usuarios_ref = db.collection('usuarios')
-            query = usuarios_ref.where('rfid', '==', id_tarjeta).where('clave', '==', clave).limit(1).get()
-
+            query = usuarios_ref.where(filter= BaseCompositeFilter("AND",[FieldFilter('rfid', '==', id_tarjeta), FieldFilter('clave', '==', clave)])).limit(1).get()
+            
             # Comprobar si se encontró algún usuario con la tarjeta y clave proporcionadas
             if query:
                 # Eliminar el usuario de Firestore
                 usuarios_ref.document(query[0].id).delete()
-                lcd.clear()
-                mostrar_en_lcd("USUARIO ELIMINADO")
+                LCD1602.clear()
+                LCD1602.write(4,0,"USUARIO")
+                LCD1602.write(3,1,"ELIMINADO")
                 registrar_evento("eliminación_exitosa", id_tarjeta=id_tarjeta)
             else:
                 # La clave no coincide con la registrada en Firestore
-                lcd.clear()
-                mostrar_en_lcd("CLAVE INCORRECTA")
+                LCD1602.clear()
+                LCD1602.write(0,0,"CLAVE INCORRECTA")
+                time.sleep(1)
+                preguntar()
         else:
             # La tarjeta no está registrada en Firestore
-            lcd.clear()
-            mostrar_en_lcd("TARJETA NO ESTA REGISTRADA")        
+            LCD1602.clear()
+            LCD1602.write(0,0,"TARJETA NO ESTA")
+            LCD1602.write(3,1,"REGISTRADA")
+            time.sleep(1)
+            preguntar()
         
 def cambiar_opcion(current_option, timer_runs):
     while timer_runs.is_set():
-        lcd.clear()
+        LCD1602.clear()
         if current_option == OPCION_INGRESAR:
-            lcd.clear()
-            lcd.write_string("\t\t\t\tINGRESAR")
-            lcd.cursor_pos = (1, 0)
-            lcd.write_string("------->1<------")
+            LCD1602.clear()
+            LCD1602.write(4,0,"INGRESAR")
+            #LCD1602.clear()
+            LCD1602.write(8,1,"1")
             current_option = OPCION_REGISTRAR
+            time.sleep(1)
         elif current_option == OPCION_REGISTRAR:
-            lcd.clear()
-            lcd.write_string("\t\t\t\tREGISTRAR")
-            lcd.cursor_pos = (1, 0)
-            lcd.write_string("------->2<------")
+            LCD1602.clear()
+            LCD1602.write(4,0,"REGISTRAR")
+            #LCD1602.clear()
+            LCD1602.write(8,1,"2")
             current_option = OPCION_ELIMINAR
+            time.sleep(1)
         elif current_option == OPCION_ELIMINAR:
-            lcd.clear()
-            lcd.write_string("\t\t\t\tELIMINAR")
-            lcd.cursor_pos = (1, 0)
-            lcd.write_string("------->3<------")
+            LCD1602.clear()
+            LCD1602.write(4,0,"ELIMINAR")
+            #LCD1602.clear()
+            LCD1602.write(8,1,"3")
             current_option = OPCION_INGRESAR
+            time.sleep(1)
         time.sleep(1)
 def main():
     setup_matrix()
-    lcd.clear()
-    mostrar_en_lcd("\t\t\tBIENVENIDO")
+    LCD1602.clear()
+    LCD1602.write(3,0,"BIENVENIDO")
     time.sleep(1)
-    lcd.clear()
+    LCD1602.clear()
     
     # Lógica principal
     current_option = OPCION_INGRESAR

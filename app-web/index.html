@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Administracion - Control de Acceso</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&display=swap" rel="stylesheet">
+    <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-firestore.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/crypto-js.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    
+    <link rel="stylesheet" href="css/login-register.css">
+</head>
+<body>
+
+  <div class="login-page">
+    <div class="form">
+      <form class="register-form" id="registerForm">
+        <input id="usernameRegister" type="text" placeholder="Nombre de usuario" required/>
+        <input id="emailRegister" type="email" placeholder="Correo electronico" required/>
+        <input id="passwordRegister" type="password" placeholder="Contraseña" required/>
+        <input id="passwordRegisterCheck" type="password" placeholder="Repita su contraseña" required/>
+        <div class="button-container">
+          <button type="submit" id="registerButton">Registrarse</button>
+        </div>
+        <p class="message">¿Ya estas registrado? <a href="#">Inicia Sesion</a></p>
+      </form>
+      <form class="login-form" id="loginForm">
+        <input id="usernameLogin" type="text" placeholder="Nombre de usuario" required/>
+        <input id="passwordLogin" type="password" placeholder="Contraseña" required/>
+        <div class="button-container">
+          <button type="submit" id="loginButton">Iniciar Sesion</button>
+        </div>
+        <p class="message">¿No estas registrado? <a href="#">Crea tu cuenta</a></p>
+      </form>
+    </div>
+  </div>
+  <script type="module" src="js/firebase.js"></script>
+  <script type="module" src="js/login-register.js"></script>
+</body>
+</html>

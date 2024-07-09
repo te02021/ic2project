@@ -1,3 +1,5 @@
+import paho.mqtt.client as mqtt
+import threading
 import RPi.GPIO as GPIO
 from mfrc522 import SimpleMFRC522
 import time
@@ -7,11 +9,14 @@ import LCD1602
 import firebase_admin
 from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1.base_query import FieldFilter, BaseCompositeFilter
-import threading
 
 # Configurar GPIO
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
+
+# Inicializar el evento
+event = threading.Event()
+esperar_tecla_event = threading.Event()
 
 # Obtener la fecha y hora actual en UTC
 now_utc = datetime.datetime.utcnow()
@@ -50,12 +55,14 @@ keys = [
     ['*', '0', '#']
 ]
 
-# Definición de las opciones
-OPCION_INGRESAR = 1
-OPCION_REGISTRAR = 2
-OPCION_ELIMINAR = 3
+# MQTT
+TOPIC_ESTADO_PUBLISHER = "estado/publisher"
+TOPIC_FUNCION_REGISTRAR = "funcion/registrar"
+TOPIC_FUNCION_ELIMINAR = "funcion/eliminar"
+TOPIC_REGISTRAR = "web/registrar"
+TOPIC_ELIMINAR = "web/eliminar"
 
-def preguntar():
+def preguntar(arg):
     LCD1602.clear()
     LCD1602.write(0,0,"0->VOLVER A MENU")
     LCD1602.write(0,1,"1->REITENTAR")
@@ -66,9 +73,13 @@ def preguntar():
             opcion = tecla
 
     if opcion == "0":
+        event.set()
         main()
     elif opcion == "1":
-        eliminar()
+        if arg == 1:
+            registrar()
+        elif arg == 2:
+            eliminar()
 
 def setup_matrix():
     # Configurar pines de fila como salida y pines de columna como entrada con pull-up
@@ -81,6 +92,7 @@ def setup_matrix():
 
 # Función para leer el teclado matricial y determinar qué tecla ha sido presionada
 def getKey():
+    
     k = None
     for c in range(len(pinCol)):
         for r in range(len(pinFila)):
@@ -140,7 +152,6 @@ def ingresar_clave():
         tecla = getKey()
         if tecla is not None and tecla.isdigit():
             clave += tecla
-            print(contador)
             LCD1602.write(contador,1,"*")  # Muestra "*" en lugar de la tecla presionada para ocultar la clave
             contador += 1
             time.sleep(0.5)  # Espera 0.5 segundos antes de limpiar la pantalla
@@ -172,6 +183,7 @@ def registrar_evento(evento, **kwargs):
             'evento': evento
         })
     time.sleep(0.5)
+    event.set()
     main()
     
 def ingresar_con_rfid(id_tarjeta):
@@ -233,6 +245,7 @@ def ingresar():
     elif opcion == "2":
         ingresar_con_clave()
     elif opcion == "0":
+        event.set()
         main()
 
 def registrar():
@@ -261,7 +274,8 @@ def registrar():
                 'clave': clave
             })
             LCD1602.clear()
-            LCD1602.write(0,0,"USUARIO REGISTRADO")
+            LCD1602.write(4,0,"USUARIO")
+            LCD1602.write(3,1,"REGISTRADO") 
             registrar_evento("registro_exitoso", id_tarjeta=id_tarjeta)
             time.sleep(1)
 
@@ -293,66 +307,86 @@ def eliminar():
                 LCD1602.clear()
                 LCD1602.write(0,0,"CLAVE INCORRECTA")
                 time.sleep(1)
-                preguntar()
+                preguntar(2)
         else:
             # La tarjeta no está registrada en Firestore
             LCD1602.clear()
             LCD1602.write(0,0,"TARJETA NO ESTA")
             LCD1602.write(3,1,"REGISTRADA")
             time.sleep(1)
-            preguntar()
+            preguntar(2)
         
-def cambiar_opcion(current_option, timer_runs):
-    while timer_runs.is_set():
-        LCD1602.clear()
-        if current_option == OPCION_INGRESAR:
-            LCD1602.clear()
-            LCD1602.write(4,0,"INGRESAR")
-            #LCD1602.clear()
-            LCD1602.write(8,1,"1")
-            current_option = OPCION_REGISTRAR
-            time.sleep(1)
-        elif current_option == OPCION_REGISTRAR:
-            LCD1602.clear()
-            LCD1602.write(4,0,"REGISTRAR")
-            #LCD1602.clear()
-            LCD1602.write(8,1,"2")
-            current_option = OPCION_ELIMINAR
-            time.sleep(1)
-        elif current_option == OPCION_ELIMINAR:
-            LCD1602.clear()
-            LCD1602.write(4,0,"ELIMINAR")
-            #LCD1602.clear()
-            LCD1602.write(8,1,"3")
-            current_option = OPCION_INGRESAR
-            time.sleep(1)
-        time.sleep(1)
-def main():
-    setup_matrix()
+def esperar_tecla(esperar_tecla_event):
+    global opcion
+    while esperar_tecla_event.is_set():
+        if opcion is None:
+            tecla = getKey()
+            if tecla in ["1","2","3"]:
+                opcion = tecla
+
+# Definir las funciones de callback para MQTT
+
+
+def on_message(client, userdata, msg):
+    event.clear()  # Pausar el main loop
+    esperar_tecla_event.clear()
     LCD1602.clear()
-    LCD1602.write(3,0,"BIENVENIDO")
-    time.sleep(1)
-    LCD1602.clear()
+    time.sleep(0.5)
+    # Procesar el mensaje recibido
+    if msg.topic == TOPIC_REGISTRAR:
+        print("Mensaje recibido en TOPIC_REGISTRAR: " + str(msg.payload.decode()))
+        if msg.payload.decode() == "1":
+            print("entre registrar")
+            registrar()
+    elif msg.topic == TOPIC_ELIMINAR:
+        print("Mensaje recibido en TOPIC_ELIMINAR: " + str(msg.payload.decode()))
+        if msg.payload.decode() == "1":
+            eliminar()
+    event.set()  # Reanudar el main loop
     
-    # Lógica principal
-    current_option = OPCION_INGRESAR
-    timer_runs = threading.Event()
-    timer_runs.set()
-    # Inicia el temporizador en un hilo aparte
-    timer = threading.Thread(target=cambiar_opcion, args=(current_option,timer_runs,))
-    timer.start()
+def send_state_publisher(client):
+    while True:
+        client.publish(TOPIC_ESTADO_PUBLISHER, "1")
+        time.sleep(30)
+
+# Configurar cliente MQTT
+def mqtt_loop():
+    global client
+    client = mqtt.Client()
+    client.on_message = on_message
+
+    client.connect("broker.emqx.io", 1883, 60)
+    
+    client.subscribe(TOPIC_REGISTRAR)
+    client.subscribe(TOPIC_ELIMINAR)
+    
+    client.loop_start()
+    
+    return client
+
+def main():
+    global opcion
+    opcion = None
+    
+    client = mqtt_loop()
+    
+    threading.Thread(target=send_state_publisher, args=(client,), daemon=True).start()
     
     while True:
-        # Lógica para manejar la selección de opciones por parte del usuario
-        opcion = ""
-        while not opcion:
-            tecla = getKey()
-            if tecla in ["1", "2", "3"]:
-                opcion = tecla
-        timer_runs.clear()
+        event.wait()  # Esperar hasta que el evento esté activo
+        LCD1602.clear()
+        LCD1602.write(0, 0, "1->ING")
+        LCD1602.write(0, 1, "2->REG")
+        LCD1602.write(7, 1, "3->ELIM")
+        
+        esperar_tecla_event.set()
+        hilo_teclado = threading.Thread(target=esperar_tecla, args=(esperar_tecla_event,))
+        hilo_teclado.start()
+        while opcion is None:
+            pass
+
         if opcion == "1":
             ingresar()
-            
         elif opcion == "2":
             registrar()
         elif opcion == "3":
@@ -360,8 +394,11 @@ def main():
 
 if __name__ == "__main__":
     try:
+        setup_matrix()
+        event.set()  # Activar el evento inicialmente
         main()
     except KeyboardInterrupt:
-        pass
-    finally:
-        GPIO.cleanup()
+        client.publish(TOPIC_ESTADO_PUBLISHER, "0")
+    except Exception as e:
+        client.publish(TOPIC_ESTADO_PUBLISHER, "0")
+

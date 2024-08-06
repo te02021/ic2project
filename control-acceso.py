@@ -9,14 +9,21 @@ import LCD1602
 import firebase_admin
 from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1.base_query import FieldFilter, BaseCompositeFilter
-
+pin_rojo = 17
+pin_verde = 27
+pin_azul = 22
 # Configurar GPIO
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
+GPIO.setup(pin_rojo, GPIO.OUT)
+GPIO.setup(pin_verde, GPIO.OUT)
+GPIO.setup(pin_azul, GPIO.OUT)
+
+ejecutar_main = True
 
 # Inicializar el evento
 event = threading.Event()
-esperar_tecla_event = threading.Event()
+#esperar_tecla_event = threading.Event()
 
 # Obtener la fecha y hora actual en UTC
 now_utc = datetime.datetime.utcnow()
@@ -26,10 +33,6 @@ local_timezone = pytz.timezone('America/Argentina/Buenos_Aires')
 
 # Convertir la fecha y hora actual a la zona horaria local
 now_local = now_utc.replace(tzinfo=pytz.utc).astimezone(local_timezone)
-
-# Inicializar LCD
-LCD1602.init(0x27, 1)
-LCD1602.clear()
 
 # Configuración del lector RFID
 reader = SimpleMFRC522()
@@ -42,6 +45,10 @@ firebase_admin.initialize_app(cred)
 
 # Obtiene una instancia de la base de datos Firestore
 db = firestore.client()
+
+# Inicializar LCD
+LCD1602.init(0x27, 1)
+LCD1602.clear()
 
 # Definir pines GPIO para filas y columnas del teclado matricial
 pinFila = [21, 20, 16, 12]  # ROW1, ROW2, ROW3, ROW4
@@ -57,10 +64,17 @@ keys = [
 
 # MQTT
 TOPIC_ESTADO_PUBLISHER = "estado/publisher"
-TOPIC_FUNCION_REGISTRAR = "funcion/registrar"
-TOPIC_FUNCION_ELIMINAR = "funcion/eliminar"
 TOPIC_REGISTRAR = "web/registrar"
 TOPIC_ELIMINAR = "web/eliminar"
+
+def set_color(rojo, verde, azul):
+    GPIO.output(pin_rojo, rojo)
+    GPIO.output(pin_verde, verde)
+    GPIO.output(pin_azul, azul)
+
+pausar_main_event = threading.Event()
+main_thread = None
+main_thread_lock = threading.Lock()
 
 def preguntar(arg):
     LCD1602.clear()
@@ -98,7 +112,7 @@ def getKey():
         for r in range(len(pinFila)):
             GPIO.output(pinFila[r], GPIO.LOW)
             if GPIO.input(pinCol[c]) == GPIO.LOW:
-                time.sleep(0.02)  # Debounce de 20ms
+                time.sleep(0.05)  # Debounce de 20ms
                 while GPIO.input(pinCol[c]) == GPIO.LOW:
                     pass
                 k = keys[r][c]
@@ -183,7 +197,6 @@ def registrar_evento(evento, **kwargs):
             'evento': evento
         })
     time.sleep(0.5)
-    event.set()
     main()
     
 def ingresar_con_rfid(id_tarjeta):
@@ -210,17 +223,13 @@ def ingresar_con_clave():
     LCD1602.clear()
     LCD1602.write(0,0,"INGRESE CLAVE:")
     clave = ingresar_clave()
-    
-
     # Comprobar si se encontró algún usuario con la clave proporcionada
     if verificar_clave_en_firebase(clave):
-        # La clave coincide con la de un usuario registrado
         LCD1602.clear()
         LCD1602.write(0,0,"ACCESO PERMITIDO")
         registrar_evento("ingreso_clave_exitoso", id_clave=clave)
         time.sleep(1)
     else:
-        # La clave no coincide con ninguna clave registrada
         LCD1602.clear()
         LCD1602.write(0,0,"ACCESO DENEGADO")
         registrar_evento("ingreso_clave_fallido", id_clave=clave)
@@ -230,13 +239,11 @@ def ingresar():
     LCD1602.clear()
     LCD1602.write(0,0,"1->RFID 2->CLAVE")
     LCD1602.write(4,1,"0->VOLVER")
-    
     opcion = ""
     while not opcion:
         tecla = getKey()
         if tecla in ["1", "2", "0"]:
             opcion = tecla
-
     if opcion == "1":
         LCD1602.clear()
         LCD1602.write(0,0,"ACERQUE SU RFID")
@@ -245,7 +252,6 @@ def ingresar():
     elif opcion == "2":
         ingresar_con_clave()
     elif opcion == "0":
-        event.set()
         main()
 
 def registrar():
@@ -275,7 +281,7 @@ def registrar():
             })
             LCD1602.clear()
             LCD1602.write(4,0,"USUARIO")
-            LCD1602.write(3,1,"REGISTRADO") 
+            LCD1602.write(3,1,"REGISTRADO")
             registrar_evento("registro_exitoso", id_tarjeta=id_tarjeta)
             time.sleep(1)
 
@@ -303,46 +309,28 @@ def eliminar():
                 LCD1602.write(3,1,"ELIMINADO")
                 registrar_evento("eliminación_exitosa", id_tarjeta=id_tarjeta)
             else:
-                # La clave no coincide con la registrada en Firestore
                 LCD1602.clear()
                 LCD1602.write(0,0,"CLAVE INCORRECTA")
                 time.sleep(1)
                 preguntar(2)
         else:
-            # La tarjeta no está registrada en Firestore
-            LCD1602.clear()
+            LD1602.clear()
             LCD1602.write(0,0,"TARJETA NO ESTA")
             LCD1602.write(3,1,"REGISTRADA")
             time.sleep(1)
             preguntar(2)
-        
-def esperar_tecla(esperar_tecla_event):
-    global opcion
-    while esperar_tecla_event.is_set():
-        if opcion is None:
-            tecla = getKey()
-            if tecla in ["1","2","3"]:
-                opcion = tecla
 
 # Definir las funciones de callback para MQTT
-
-
 def on_message(client, userdata, msg):
-    event.clear()  # Pausar el main loop
-    esperar_tecla_event.clear()
-    LCD1602.clear()
-    time.sleep(0.5)
-    # Procesar el mensaje recibido
-    if msg.topic == TOPIC_REGISTRAR:
-        print("Mensaje recibido en TOPIC_REGISTRAR: " + str(msg.payload.decode()))
-        if msg.payload.decode() == "1":
-            print("entre registrar")
-            registrar()
-    elif msg.topic == TOPIC_ELIMINAR:
-        print("Mensaje recibido en TOPIC_ELIMINAR: " + str(msg.payload.decode()))
-        if msg.payload.decode() == "1":
-            eliminar()
-    event.set()  # Reanudar el main loop
+    message = msg.payload.decode()
+    if msg.topic == "web/registrar":
+        set_color(0,0,1)
+        time.sleep(2)
+        set_color(0,0,0)
+    elif msg.topic == "web/eliminar":
+        set_color(1,0,0)
+        time.sleep(2)
+        set_color(0,0,0)
     
 def send_state_publisher(client):
     while True:
@@ -355,50 +343,49 @@ def mqtt_loop():
     client = mqtt.Client()
     client.on_message = on_message
 
-    client.connect("broker.emqx.io", 1883, 60)
+    client.connect("broker.emqx.io", 1883, 30)
     
     client.subscribe(TOPIC_REGISTRAR)
     client.subscribe(TOPIC_ELIMINAR)
     
     client.loop_start()
-    
     return client
+
+def start_main_thread():
+    global main_thread
+    pausar_main_event.set()  # Asegurarse de que el hilo principal esté en ejecución
+    main_thread = threading.Thread(target=main)
+    main_thread.start()
 
 def main():
     global opcion
     opcion = None
-    
     client = mqtt_loop()
-    
+      
     threading.Thread(target=send_state_publisher, args=(client,), daemon=True).start()
     
+    LCD1602.clear()
+    LCD1602.write(0, 0, "1->ING")
+    LCD1602.write(0, 1, "2->REG")
+    LCD1602.write(7, 1, "3->ELIM")
     while True:
-        event.wait()  # Esperar hasta que el evento esté activo
-        LCD1602.clear()
-        LCD1602.write(0, 0, "1->ING")
-        LCD1602.write(0, 1, "2->REG")
-        LCD1602.write(7, 1, "3->ELIM")
+        pausar_main_event.wait()
+        opcion = None
+        tecla = getKey()
+        if tecla in ["1","2","3"]:
+            opcion = tecla
         
-        esperar_tecla_event.set()
-        hilo_teclado = threading.Thread(target=esperar_tecla, args=(esperar_tecla_event,))
-        hilo_teclado.start()
-        while opcion is None:
-            pass
-
         if opcion == "1":
             ingresar()
         elif opcion == "2":
             registrar()
         elif opcion == "3":
             eliminar()
-
-if __name__ == "__main__":
-    try:
-        setup_matrix()
-        event.set()  # Activar el evento inicialmente
-        main()
-    except KeyboardInterrupt:
-        client.publish(TOPIC_ESTADO_PUBLISHER, "0")
-    except Exception as e:
-        client.publish(TOPIC_ESTADO_PUBLISHER, "0")
-
+try:
+    set_color(0,0,0)
+    setup_matrix()
+    start_main_thread()
+except KeyboardInterrupt:
+    client.publish(TOPIC_ESTADO_PUBLISHER, "0")
+except Exception as e:
+    client.publish(TOPIC_ESTADO_PUBLISHER, "0")
